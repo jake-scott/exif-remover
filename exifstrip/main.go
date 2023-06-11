@@ -16,11 +16,11 @@ import (
 	"github.com/GoogleCloudPlatform/functions-framework-go/functions"
 	"github.com/cloudevents/sdk-go/v2/event"
 
-	// "github.com/dsoprea/go-exif/v3"
-
 	"image/gif"
 	"image/jpeg"
 	"image/png"
+
+	_ "golang.org/x/image/webp"
 )
 
 var config = struct {
@@ -60,12 +60,6 @@ func idLogger(id string) func(format string, v ...any) {
 	}
 }
 
-func main() {
-	if err := stripExif(context.Background(), "abc", "photos-in.poptart.org", "cat.jpeg"); err != nil {
-		log.Println(err)
-	}
-}
-
 func stripExifEvent(ctx context.Context, e event.Event) error {
 	id := e.ID()
 	log := idLogger(id)
@@ -77,10 +71,10 @@ func stripExifEvent(ctx context.Context, e event.Event) error {
 	}
 
 	log("Bucket: %s, Object: %s", data.Bucket, data.Name)
-	return stripExif(ctx, id, data.Bucket, data.Name)
+	return StripExif(ctx, id, data.Bucket, data.Name)
 }
 
-func stripExif(ctx context.Context, id, inBucket, object string) error {
+func StripExif(ctx context.Context, id, inBucket, object string) error {
 	log := idLogger(id)
 
 	client, err := storage.NewClient(context.Background())
@@ -98,10 +92,16 @@ func stripExif(ctx context.Context, id, inBucket, object string) error {
 		return fmt.Errorf("[%s] decoding object: %w", id, err)
 	}
 
-	wc := client.Bucket(config.outputBucket).Object(object).NewWriter(ctx)
+	fileType := strings.ToLower(filepath.Ext(object))
+	outName := object
+
+	if fileType == ".webp" {
+		outName = object[0:len(object)-len(fileType)] + ".jpg"
+	}
+
+	wc := client.Bucket(config.outputBucket).Object(outName).NewWriter(ctx)
 	defer wc.Close()
 
-	fileType := strings.ToLower(filepath.Ext(object))
 	switch fileType {
 	case ".jpeg", ".jpg":
 		log("Writing JPEG data")
@@ -112,6 +112,9 @@ func stripExif(ctx context.Context, id, inBucket, object string) error {
 	case ".png":
 		log("Writing PNG data")
 		err = png.Encode(wc, m)
+	case ".webp":
+		log("Writing WEBP as JPG data %s", outName)
+		err = jpeg.Encode(wc, m, nil)
 	default:
 		err = fmt.Errorf("Unsupported file type %s", fileType)
 	}
